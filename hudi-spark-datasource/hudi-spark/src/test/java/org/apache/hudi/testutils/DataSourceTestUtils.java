@@ -141,11 +141,14 @@ public class DataSourceTestUtils {
   }
 
   public static List<Row> updateRowsWithUpdatedTs(Dataset<Row> inputDf) {
-    return updateRowsWithUpdatedTs(inputDf, false, false);
+    return updateRowsWithUpdatedTs(inputDf.collectAsList(), false, false);
   }
 
   public static List<Row> updateRowsWithUpdatedTs(Dataset<Row> inputDf, Boolean lowerTs, Boolean updatePartitionPath) {
-    List<Row> input = inputDf.collectAsList();
+    return updateRowsWithUpdatedTs(inputDf.collectAsList(), lowerTs, updatePartitionPath);
+  }
+
+  public static List<Row> updateRowsWithUpdatedTs(List<Row> input, Boolean lowerTs, Boolean updatePartitionPath) {
     List<Row> rows = new ArrayList<>();
     for (Row row : input) {
       Object[] values = new Object[4];

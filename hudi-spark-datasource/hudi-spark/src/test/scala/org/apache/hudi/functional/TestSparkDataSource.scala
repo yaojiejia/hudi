@@ -513,45 +513,22 @@ class TestSparkDataSource extends SparkClientFunctionalTestHarness {
 
   def ingestNewBatch(tableType: HoodieTableType, recordsToUpdate: Integer, structType: StructType, inserts: java.util.List[Row],
                      writeOpts: Map[String, String]): Unit = {
-    val toUpdate = sqlContext.createDataFrame(DataSourceTestUtils.getUniqueRows(inserts, recordsToUpdate), structType).collectAsList()
+    val toUpdate = DataSourceTestUtils.getUniqueRows(inserts, recordsToUpdate)
+    val quarter  = recordsToUpdate / 4
+    val eighth   = recordsToUpdate / 8
 
-    val updateToSamePartitionHigherTs = sqlContext.createDataFrame(toUpdate.subList(0, recordsToUpdate / 4), structType)
-    val rowsToUpdate1 = DataSourceTestUtils.updateRowsWithUpdatedTs(updateToSamePartitionHigherTs)
-    val updates1 = rowsToUpdate1.subList(0, recordsToUpdate / 8)
-    val updateDf1 = spark.createDataFrame(spark.sparkContext.parallelize(convertRowListToSeq(updates1)), structType)
-    val deletes1 = rowsToUpdate1.subList(recordsToUpdate / 8, recordsToUpdate / 4)
-    val deleteDf1 = spark.createDataFrame(spark.sparkContext.parallelize(convertRowListToSeq(deletes1)), structType)
-    val batch1 = deleteDf1.withColumn("_hoodie_is_deleted", lit(true)).union(updateDf1)
-    batch1.cache()
+    // (lowerTs, updatePartitionPath) — covers all 4 combinations:
+    // same partition/higher ts, diff partition/higher ts, same partition/lower ts, diff partition/lower ts
+    val scenarios = Seq((false, false), (false, true), (true, false), (true, true))
 
-    val updateToDiffPartitionHigherTs = sqlContext.createDataFrame(toUpdate.subList(recordsToUpdate / 4, recordsToUpdate / 2), structType)
-    val rowsToUpdate2 = DataSourceTestUtils.updateRowsWithUpdatedTs(updateToDiffPartitionHigherTs, false, true)
-    val updates2 = rowsToUpdate2.subList(0, recordsToUpdate / 8)
-    val updateDf2 = spark.createDataFrame(spark.sparkContext.parallelize(convertRowListToSeq(updates2)), structType)
-    val deletes2 = rowsToUpdate2.subList(recordsToUpdate / 8, recordsToUpdate / 4)
-    val deleteDf2 = spark.createDataFrame(spark.sparkContext.parallelize(convertRowListToSeq(deletes2)), structType)
-    val batch2 = deleteDf2.withColumn("_hoodie_is_deleted", lit(true)).union(updateDf2)
-    batch2.cache()
+    val allBatches = scenarios.zipWithIndex.map { case ((lowerTs, updatePartition), i) =>
+      val updated = DataSourceTestUtils.updateRowsWithUpdatedTs(toUpdate.subList(i * quarter, (i + 1) * quarter), lowerTs, updatePartition)
+      val updateDf = spark.createDataFrame(spark.sparkContext.parallelize(convertRowListToSeq(updated.subList(0, eighth))), structType)
+      val deleteDf = spark.createDataFrame(spark.sparkContext.parallelize(convertRowListToSeq(updated.subList(eighth, quarter))), structType)
+      deleteDf.withColumn("_hoodie_is_deleted", lit(true)).union(updateDf)
+    }
 
-    val updateToSamePartitionLowerTs = sqlContext.createDataFrame(toUpdate.subList(recordsToUpdate / 2, recordsToUpdate * 3 / 4), structType)
-    val rowsToUpdate3 = DataSourceTestUtils.updateRowsWithUpdatedTs(updateToSamePartitionLowerTs, true, false)
-    val updates3 = rowsToUpdate3.subList(0, recordsToUpdate / 8)
-    val updateDf3 = spark.createDataFrame(spark.sparkContext.parallelize(convertRowListToSeq(updates3)), structType)
-    val deletes3 = rowsToUpdate3.subList(recordsToUpdate / 8, recordsToUpdate / 4)
-    val deleteDf3 = spark.createDataFrame(spark.sparkContext.parallelize(convertRowListToSeq(deletes3)), structType)
-    val batch3 = deleteDf3.withColumn("_hoodie_is_deleted", lit(true)).union(updateDf3)
-    batch3.cache()
-
-    val updateToDiffPartitionLowerTs = sqlContext.createDataFrame(toUpdate.subList(recordsToUpdate * 3 / 4, recordsToUpdate), structType)
-    val rowsToUpdate4 = DataSourceTestUtils.updateRowsWithUpdatedTs(updateToDiffPartitionLowerTs, true, true)
-    val updates4 = rowsToUpdate4.subList(0, recordsToUpdate / 8)
-    val updateDf4 = spark.createDataFrame(spark.sparkContext.parallelize(convertRowListToSeq(updates4)), structType)
-    val deletes4 = rowsToUpdate4.subList(recordsToUpdate / 8, recordsToUpdate / 4)
-    val deleteDf4 = spark.createDataFrame(spark.sparkContext.parallelize(convertRowListToSeq(deletes4)), structType)
-    val batch4 = deleteDf4.withColumn("_hoodie_is_deleted", lit(true)).union(updateDf4)
-    batch4.cache()
-
-    batch1.union(batch2).union(batch3).union(batch4).write.format("hudi")
+    allBatches.reduce(_ union _).write.format("hudi")
       .options(writeOpts)
       .option(DataSourceWriteOptions.OPERATION.key, DataSourceWriteOptions.UPSERT_OPERATION_OPT_VAL)
       .option(DataSourceWriteOptions.TABLE_TYPE.key, tableType.name())
