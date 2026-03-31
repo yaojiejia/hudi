@@ -26,14 +26,15 @@ import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
+import java.net.JarURLConnection;
 import java.net.URISyntaxException;
 import java.net.URL;
-import java.util.ArrayList;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.Arrays;
-import java.util.Enumeration;
-import java.util.List;
+import java.util.Collections;
 import java.util.Map;
-import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
@@ -129,52 +130,42 @@ public class ReflectionUtils {
    * @return Stream of Class names in package
    */
   public static Stream<String> getTopLevelClassesInClasspath(Class<?> clazz) {
+    Package pkg = clazz.getPackage();
+    if (pkg == null) {
+      return Stream.empty();
+    }
     ClassLoader classLoader = Thread.currentThread().getContextClassLoader();
-    String packageName = clazz.getPackage().getName();
+    String packageName = pkg.getName();
     String path = packageName.replace('.', '/');
-    Enumeration<URL> resources = null;
     try {
-      resources = classLoader.getResources(path);
+      return Collections.list(classLoader.getResources(path)).stream()
+          .flatMap(url -> classesFromUrl(url, packageName, path));
     } catch (IOException e) {
-      log.error("Unable to fetch Resources in package " + e.getMessage());
+      log.error("Unable to fetch Resources in package", e);
+      return Stream.empty();
     }
-    List<File> directories = new ArrayList<>();
-    while (Objects.requireNonNull(resources).hasMoreElements()) {
-      URL resource = resources.nextElement();
-      try {
-        directories.add(new File(resource.toURI()));
-      } catch (URISyntaxException e) {
-        log.error("Unable to get " + e.getMessage());
-      }
-    }
-    List<String> classes = new ArrayList<>();
-    for (File directory : directories) {
-      classes.addAll(findClasses(directory, packageName));
-    }
-    return classes.stream();
   }
 
-  /**
-   * Recursive method used to find all classes in a given directory and subdirs.
-   *
-   * @param directory   The base directory
-   * @param packageName The package name for classes found inside the base directory
-   * @return classes in the package
-   */
-  private static List<String> findClasses(File directory, String packageName) {
-    List<String> classes = new ArrayList<>();
-    if (!directory.exists()) {
-      return classes;
-    }
-    File[] files = directory.listFiles();
-    for (File file : Objects.requireNonNull(files)) {
-      if (file.isDirectory()) {
-        classes.addAll(findClasses(file, packageName + "." + file.getName()));
-      } else if (file.getName().endsWith(".class")) {
-        classes.add(packageName + '.' + file.getName().substring(0, file.getName().length() - 6));
+  private static Stream<String> classesFromUrl(URL url, String packageName, String path) {
+    try {
+      if ("jar".equals(url.getProtocol())) {
+        JarURLConnection conn = (JarURLConnection) url.openConnection();
+        return conn.getJarFile().stream()
+            .filter(e -> !e.isDirectory() && e.getName().startsWith(path) && e.getName().endsWith(".class"))
+            .map(e -> e.getName().replace('/', '.').replace(".class", ""));
       }
+      if (!"file".equals(url.getProtocol())) {
+        return Stream.empty();
+      }
+      Path dir = Paths.get(url.toURI());
+      return Files.walk(dir)
+          .filter(p -> p.toString().endsWith(".class"))
+          .map(p -> packageName + "." + dir.relativize(p).toString()
+              .replace(File.separatorChar, '.').replace(".class", ""));
+    } catch (IOException | URISyntaxException e) {
+      log.error("Unable to scan classpath URL {}", url, e);
+      return Stream.empty();
     }
-    return classes;
   }
 
   /**

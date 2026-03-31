@@ -28,9 +28,16 @@ import org.apache.hudi.storage.StoragePathFilter;
 
 import org.junit.jupiter.api.Test;
 
+import java.util.List;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
 import static org.apache.hudi.common.util.ReflectionUtils.getMethod;
+import static org.apache.hudi.common.util.ReflectionUtils.getTopLevelClassesInClasspath;
 import static org.apache.hudi.common.util.ReflectionUtils.isSubClass;
+import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
@@ -45,6 +52,30 @@ public class TestReflectionUtils {
     assertTrue(isSubClass(subClassName2, EarlyConflictDetectionStrategy.class));
     assertTrue(isSubClass(subClassName2, TimelineServerBasedDetectionStrategy.class));
     assertFalse(isSubClass(subClassName2, DirectMarkerBasedDetectionStrategy.class));
+  }
+
+  @Test
+  public void testGetTopLevelClassesInClasspath() {
+    List<String> classes = getTopLevelClassesInClasspath(ReflectionUtils.class).collect(Collectors.toList());
+    assertFalse(classes.isEmpty(), "Expected at least one class in the scanned package");
+    assertTrue(classes.contains(ReflectionUtils.class.getName()),
+        "Expected ReflectionUtils to appear in its own package scan");
+    assertTrue(classes.stream().allMatch(c -> c.startsWith("org.apache.hudi.common.util")),
+        "All scanned class names should be under org.apache.hudi.common.util");
+  }
+
+  @Test
+  public void testGetTopLevelClassesInClasspathWithArrayClass() {
+    Stream<String> stream = getTopLevelClassesInClasspath(String[].class);
+    assertNotNull(stream, "Should return a non-null stream for array classes");
+    assertEquals(0, stream.count(), "Should return an empty stream for array classes");
+  }
+
+  @Test
+  public void testGetTopLevelClassesInClasspathWithPrimitiveArrayClass() {
+    Stream<String> stream = getTopLevelClassesInClasspath(int[].class);
+    assertNotNull(stream, "Should return a non-null stream for primitive array classes");
+    assertEquals(0, stream.count(), "Should return an empty stream for primitive array classes");
   }
 
   @Test
